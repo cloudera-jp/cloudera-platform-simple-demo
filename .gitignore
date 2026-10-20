@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+data/cmdb_models_dev/
+
+# Workbench / ローカル試行のバックアップ
+*.ver1
+*.ver2

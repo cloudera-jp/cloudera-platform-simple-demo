@@ -1,0 +1,37 @@
+name: Weblog Viewer (Flask + Spark SQL)
+description: >-
+  Flask Workbench Application that queries demo_logs.weblog on the Spark data lake
+  using Spark SQL, with dropdown and partial-match filters.
+author: SOC PoC Demo
+specification_version: "1.0"
+prototype_version: "1.0"
+date: "2026-10-04"
+
+runtimes:
+  - editor: Workbench
+    kernel: Python 3.11
+    edition: Standard
+
+tasks:
+  - type: run_session
+    name: Install Dependencies
+    script: install_dependencies.py
+    kernel: python3
+    cpu: 1
+    memory: 2
+    short_summary: Install Python packages from requirements.txt.
+
+  - type: start_application
+    name: Weblog Flask App
+    subdomain: weblog-viewer
+    script: app.py
+    kernel: python3
+    cpu: 1
+    memory: 2
+    short_summary: Start the Flask weblog viewer.
+    long_summary: >-
+      Reads demo_logs.weblog via Spark SQL (Spark Data Lake connection).
+      Deploy app.py and templates under /home/cdsw/demo_source/flask or set FLASK_APP_ROOT.
+    environment_variables:
+      TASK_TYPE: START_APPLICATION
+      FLASK_APP_ROOT: /home/cdsw/demo_source/flask

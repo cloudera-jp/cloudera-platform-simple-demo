@@ -1,0 +1,6 @@
+# FastAPI 0.12x 系は pydantic v2 必須。CAI 環境で欠けやすい依存を明示する。
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+pydantic==2.10.6
+annotated-types==0.7.0
+typing-extensions>=4.8.0

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Web アクセスログ Viewer</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 1.5em; line-height: 1.4; }
+        h1 { font-size: 1.4em; }
+        .meta { color: #555; margin-bottom: 1em; }
+        fieldset { border: 1px solid #ccc; margin-bottom: 1em; padding: 1em; }
+        legend { font-weight: bold; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75em; }
+        label { display: block; font-size: 0.85em; margin-bottom: 0.2em; }
+        select, input[type="text"] { width: 100%; padding: 0.35em; box-sizing: border-box; }
+        button { margin-top: 0.5em; padding: 0.5em 1.2em; }
+        table { border-collapse: collapse; width: 100%; font-size: 0.85em; margin-top: 1em; }
+        th, td { border: 1px solid #ddd; padding: 6px; text-align: left; vertical-align: top; }
+        th { background: #f2f2f2; position: sticky; top: 0; }
+        .empty { margin-top: 1em; color: #666; }
+        .table-wrap { overflow-x: auto; max-height: 70vh; }
+    </style>
+</head>
+<body>
+    <h1>Web アクセスログ Viewer</h1>
+    <p class="meta">
+        データソース: <code>{{ table_name }}</code>（Spark Data Lake / Hive 外部テーブル）<br>
+        表示上限: {{ max_rows }} 行
+    </p>
+
+    <form method="POST">
+        <fieldset>
+            <legend>ドロップダウン（完全一致）</legend>
+            <div class="grid">
+                {% for col in ['method', 'path', 'http_version', 'status'] %}
+                <div>
+                    <label for="{{ col }}">{{ col }}</label>
+                    <select id="{{ col }}" name="{{ col }}">
+                        <option value="">— すべて —</option>
+                        {% for opt in filter_options[col] %}
+                        <option value="{{ opt }}" {% if form_values[col] == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endfor %}
+            </div>
+        </fieldset>
+
+        <fieldset>
+            <legend>テキスト（部分一致）</legend>
+            <div class="grid">
+                {% for col in ['client_ip', 'ident', 'authuser', 'log_datetime', 'bytes', 'referer', 'user_agent'] %}
+                <div>
+                    <label for="{{ col }}">{{ col }}</label>
+                    <input type="text" id="{{ col }}" name="{{ col }}" value="{{ form_values[col] }}" placeholder="部分一致">
+                </div>
+                {% endfor %}
+            </div>
+        </fieldset>
+
+        <button type="submit">フィルタ適用</button>
+        <button type="reset" onclick="window.location='/'">クリア</button>
+    </form>
+
+    {% if results %}
+    <h2>結果（{{ results|length }} 行）</h2>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    {% for col in display_columns %}
+                    <th>{{ col }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in results %}
+                <tr>
+                    {% for col in display_columns %}
+                    <td>{{ row[col] }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty">該当するログがありません。条件を変えてください。</p>
+    {% endif %}
+</body>
+</html>

@@ -1,0 +1,33 @@
+name: Weblog Stats API (FastAPI + Spark SQL)
+description: >-
+  FastAPI Workbench Application returning JSON aggregates from demo_logs.weblog.
+author: SOC PoC Demo
+specification_version: "1.0"
+prototype_version: "1.0"
+date: "2026-10-04"
+
+runtimes:
+  - editor: Workbench
+    kernel: Python 3.11
+    edition: Standard
+
+tasks:
+  - type: run_session
+    name: Install Dependencies
+    script: install_dependencies.py
+    kernel: python3
+    cpu: 1
+    memory: 2
+    short_summary: Install Python packages from requirements.txt.
+
+  - type: start_application
+    name: Weblog FastAPI
+    subdomain: weblog-api
+    script: app.py
+    kernel: python3
+    cpu: 1
+    memory: 2
+    short_summary: Start the FastAPI weblog stats service.
+    environment_variables:
+      TASK_TYPE: START_APPLICATION
+      FASTAPI_APP_ROOT: /home/cdsw/demo_source/fastapi

@@ -1,0 +1,619 @@
+{
+  "flowEncodingVersion": "1.0",
+  "parameterContexts": {},
+  "parameterProviders": {},
+  "parameterContextName": "",
+  "externalControllerServices": {},
+  "flowContents": {
+    "identifier": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+    "instanceIdentifier": "40ee3e5c-8a84-4cc6-9208-7dc6cccf67e1",
+    "name": "VPC Flow Log Generator",
+    "comments": "Generates AWS VPC Flow Log format (v2) every 5 minutes using CMDB NIC IPs, writes to HDFS /data/logs/flowlog, deletes files older than 6 hours.",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "processGroups": [],
+    "remoteProcessGroups": [],
+    "processors": [
+      {
+        "identifier": "73a62ad0-2099-489a-b89d-4abf32cd8a2e",
+        "instanceIdentifier": "db36ad4f-d65b-43af-81b4-94d5065e8b02",
+        "name": "Trigger Every 5 Minutes",
+        "comments": "Cron: every 5 minutes. Triggers VPC flow log generation.",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-standard-nar",
+          "version": "2.3.0"
+        },
+        "style": {},
+        "type": "org.apache.nifi.processors.standard.GenerateFlowFile",
+        "properties": {
+          "File Size": "0B",
+          "Batch Size": "1",
+          "Data Format": "Text",
+          "Unique FlowFiles": "false",
+          "character-set": "UTF-8"
+        },
+        "propertyDescriptors": {},
+        "schedulingPeriod": "0 */5 * * * ?",
+        "schedulingStrategy": "CRON_DRIVEN",
+        "executionNode": "ALL",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 0,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [],
+        "scheduledState": "ENABLED",
+        "componentType": "PROCESSOR",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "6ac6365f-723c-4647-8192-c42b3b4ada4a",
+        "instanceIdentifier": "13d2f3cc-7ad2-458a-9a20-5a804240a529",
+        "name": "Set CMDB IP List Path",
+        "comments": "Points ExecuteScript to cmdb_nic_ips.txt on NiFi nodes.",
+        "position": {
+          "x": 200,
+          "y": -120
+        },
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-update-attribute-nar",
+          "version": "2.3.0"
+        },
+        "style": {},
+        "type": "org.apache.nifi.processors.attributes.UpdateAttribute",
+        "properties": {
+          "Store State": "Do not store state",
+          "canonical-value-lookup-cache-size": "100",
+          "cmdb.ip.list.path": "${cmdb.nic.ip.list.path}"
+        },
+        "propertyDescriptors": {},
+        "schedulingPeriod": "0 sec",
+        "schedulingStrategy": "TIMER_DRIVEN",
+        "executionNode": "ALL",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 0,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [],
+        "scheduledState": "ENABLED",
+        "componentType": "PROCESSOR",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "11993095-fde4-42a1-86ea-8eae70cd71d0",
+        "instanceIdentifier": "8cd7467f-a59c-4ad9-9e54-9409cd2df75a",
+        "name": "Generate VPC Flow Logs",
+        "comments": "AWS VPC Flow Log v2 lines (30). Uses CMDB NIC IPs.",
+        "position": {
+          "x": 400,
+          "y": -120
+        },
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-scripting-nar",
+          "version": "2.3.0"
+        },
+        "style": {},
+        "type": "org.apache.nifi.processors.script.ExecuteScript",
+        "properties": {
+          "Script Engine": "python",
+          "Script Body": "##\n## Description: Generates AWS VPC Flow Log records (format version 2, space-separated).\n## Source/dest addresses are chosen from CMDB nic IP list (see cmdb.ip.list.path).\n##\n## Inferred raw format from Splunk-enriched sample (_time, src_ip, dest_ip, app=ssl/443):\n##   version account-id interface-id srcaddr dstaddr srcport dstport protocol\n##   packets bytes start end action log-status\n##\n\n\nfrom org.apache.nifi.processor.io import OutputStreamCallback\nimport random\nimport time\n\n# Override on NiFi node via flow variable / UpdateAttribute (cmdb.ip.list.path)\nDEFAULT_IP_LIST_PATH = \"/etc/nifi/conf/cmdb_nic_ips.txt\"\n\nAWS_ACCOUNT_ID = \"123456789012\"\nINTERFACE_IDS = (\n    \"eni-0a1b2c3d4e5f67890\",\n    \"eni-01ab23cd45ef67890\",\n    \"eni-0fedcba9876543210\",\n)\n# External peers (not necessarily in CMDB) for outbound/inbound Internet flows\nEXTERNAL_IPS = (\n    \"221.0.1.1\",\n    \"221.0.2.2\",\n    \"203.0.113.10\",\n    \"198.51.100.20\",\n    \"8.8.8.8\",\n    \"1.1.1.1\",\n)\nDST_PORTS = (443, 443, 443, 80, 53, 8080, 8443)\nPROTOCOLS = (6, 6, 6, 6, 17, 6)  # TCP / UDP\n\n\ndef load_cmdb_ips(path):\n    ips = []\n    try:\n        reader = open(path, \"r\")\n    except Exception:\n        return ips\n    try:\n        for line in reader:\n            value = line.strip()\n            if value and value.count(\".\") == 3:\n                ips.append(value)\n    finally:\n        reader.close()\n    return ips\n\n\nclass PyOutputStreamCallback(OutputStreamCallback):\n    def __init__(self, cmdb_ips):\n        self.cmdb_ips = cmdb_ips\n\n    def process(self, outputStream):\n        if not self.cmdb_ips:\n            raise Exception(\n                \"CMDB IP list is empty. Deploy cmdb_nic_ips.txt and set cmdb.ip.list.path.\"\n            )\n\n        for _ in range(30):\n            eni = random.choice(INTERFACE_IDS)\n            cmdb_ip = random.choice(self.cmdb_ips)\n            external_ip = random.choice(EXTERNAL_IPS)\n\n            # Mix direction: internal->Internet or Internet->internal (CMDB IP on either side)\n            if random.choice((True, False)):\n                srcaddr, dstaddr = cmdb_ip, external_ip\n            else:\n                srcaddr, dstaddr = external_ip, cmdb_ip\n\n            srcport = random.choice(range(1024, 65535))\n            dstport = random.choice(DST_PORTS)\n            protocol = 6 if dstport != 53 else random.choice(PROTOCOLS)\n            packets = random.choice(range(1, 50))\n            if dstport in (443, 8443):\n                byte_count = random.choice(range(500, 500000))\n            elif dstport == 53:\n                byte_count = random.choice(range(64, 512))\n            else:\n                byte_count = random.choice(range(100, 50000))\n\n            offset = random.choice(range(-300, 0))\n            end_ts = int(time.time()) + offset\n            start_ts = end_ts - random.choice(range(60, 300))\n            action = random.choice((\"ACCEPT\", \"ACCEPT\", \"ACCEPT\", \"REJECT\"))\n            log_status = \"OK\"\n\n            line = (\n                \"2 {account} {eni} {src} {dst} {srcport} {dstport} {proto} \"\n                \"{packets} {bytes} {start} {end} {action} {status}\\n\"\n            ).format(\n                account=AWS_ACCOUNT_ID,\n                eni=eni,\n                src=srcaddr,\n                dst=dstaddr,\n                srcport=srcport,\n                dstport=dstport,\n                proto=protocol,\n                packets=packets,\n                bytes=byte_count,\n                start=start_ts,\n                end=end_ts,\n                action=action,\n                status=log_status,\n            )\n            outputStream.write(bytearray(line.encode(\"utf-8\")))\n\n\nflowFile = session.get()\nif flowFile is None:\n    flowFile = session.create()\n\nip_list_path = flowFile.getAttribute(\"cmdb.ip.list.path\")\nif ip_list_path is None or ip_list_path == \"\":\n    ip_list_path = DEFAULT_IP_LIST_PATH\n\ncmdb_ips = load_cmdb_ips(ip_list_path)\nflowFile = session.write(flowFile, PyOutputStreamCallback(cmdb_ips))\nsession.transfer(flowFile, REL_SUCCESS)\n"
+        },
+        "propertyDescriptors": {},
+        "schedulingPeriod": "0 sec",
+        "schedulingStrategy": "TIMER_DRIVEN",
+        "executionNode": "ALL",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 0,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [],
+        "scheduledState": "ENABLED",
+        "componentType": "PROCESSOR",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "d162ca60-d205-416f-b539-5407b09142dc",
+        "instanceIdentifier": "0fb2a3e8-7a70-40a8-b608-c0a57d9a9bdd",
+        "name": "Set HDFS Filename",
+        "comments": "",
+        "position": {
+          "x": 800,
+          "y": -120
+        },
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-update-attribute-nar",
+          "version": "2.3.0"
+        },
+        "style": {},
+        "type": "org.apache.nifi.processors.attributes.UpdateAttribute",
+        "properties": {
+          "Store State": "Do not store state",
+          "canonical-value-lookup-cache-size": "100",
+          "filename": "vpc-flow-log_${now():format('yyyy-MM-dd-HH-mm')}.log",
+          "mime.type": "text/plain"
+        },
+        "propertyDescriptors": {},
+        "schedulingPeriod": "0 sec",
+        "schedulingStrategy": "TIMER_DRIVEN",
+        "executionNode": "ALL",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 0,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [],
+        "scheduledState": "ENABLED",
+        "componentType": "PROCESSOR",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "97132b67-8a2c-4e32-9bfc-c03f7509abd9",
+        "instanceIdentifier": "11e63128-fd3e-4908-947a-2f77b768bd52",
+        "name": "PutHDFS VPC Flow Log",
+        "comments": "",
+        "position": {
+          "x": 1200,
+          "y": -120
+        },
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-hadoop-nar",
+          "version": "2.3.0"
+        },
+        "style": {},
+        "type": "org.apache.nifi.processors.hadoop.PutHDFS",
+        "properties": {
+          "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml",
+          "Directory": "/data/logs/flowlog",
+          "Conflict Resolution Strategy": "replace",
+          "writing-strategy": "Write and rename",
+          "Compression codec": "NONE"
+        },
+        "propertyDescriptors": {},
+        "schedulingPeriod": "0 sec",
+        "schedulingStrategy": "TIMER_DRIVEN",
+        "executionNode": "ALL",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 0,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [
+          "success"
+        ],
+        "scheduledState": "ENABLED",
+        "componentType": "PROCESSOR",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "47d7899b-b473-4983-bfac-768c5480530c",
+        "instanceIdentifier": "68e9b8ce-ddff-4743-8fbc-0695f86cff1a",
+        "name": "ListHDFS VPC Flow Logs",
+        "comments": "",
+        "position": {
+          "x": 400,
+          "y": 120
+        },
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-hadoop-nar",
+          "version": "2.3.0"
+        },
+        "style": {},
+        "type": "org.apache.nifi.processors.hadoop.ListHDFS",
+        "properties": {
+          "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml",
+          "Directory": "/data/logs/flowlog",
+          "Recurse Subdirectories": "false",
+          "File Filter": "vpc-flow-log_.*\\.log",
+          "file-filter-mode": "Files Only"
+        },
+        "propertyDescriptors": {},
+        "schedulingPeriod": "30 0/5 * * * ?",
+        "schedulingStrategy": "CRON_DRIVEN",
+        "executionNode": "PRIMARY",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 0,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [],
+        "scheduledState": "ENABLED",
+        "componentType": "PROCESSOR",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "e9abf0df-6167-465c-a21b-1bad3fa9622a",
+        "instanceIdentifier": "22c259dc-4466-423f-8039-7c1c374014a4",
+        "name": "Set HDFS Delete Path",
+        "comments": "",
+        "position": {
+          "x": 800,
+          "y": 120
+        },
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-update-attribute-nar",
+          "version": "2.3.0"
+        },
+        "style": {},
+        "type": "org.apache.nifi.processors.attributes.UpdateAttribute",
+        "properties": {
+          "Store State": "Do not store state",
+          "canonical-value-lookup-cache-size": "100",
+          "hdfs.delete.path": "${path}/${filename}",
+          "log.file.epoch": "${filename:substringAfter('vpc-flow-log_'):substring(0,16):toDate('yyyy-MM-dd-HH-mm'):toNumber()}"
+        },
+        "propertyDescriptors": {},
+        "schedulingPeriod": "0 sec",
+        "schedulingStrategy": "TIMER_DRIVEN",
+        "executionNode": "ALL",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 0,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [],
+        "scheduledState": "ENABLED",
+        "componentType": "PROCESSOR",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "b964b98e-44c2-45db-ae8a-d9a8f829f828",
+        "instanceIdentifier": "442ed6fd-0513-45aa-96f3-df203e15dee5",
+        "name": "Route Files Older Than 6 Hours",
+        "comments": "",
+        "position": {
+          "x": 1200,
+          "y": 120
+        },
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-standard-nar",
+          "version": "2.3.0"
+        },
+        "style": {},
+        "type": "org.apache.nifi.processors.standard.RouteOnAttribute",
+        "properties": {
+          "Routing Strategy": "Route to Property name",
+          "delete": "${now():toNumber():minus(21600000):gt(${log.file.epoch:toNumber()})}"
+        },
+        "propertyDescriptors": {},
+        "schedulingPeriod": "0 sec",
+        "schedulingStrategy": "TIMER_DRIVEN",
+        "executionNode": "ALL",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 0,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [
+          "unmatched"
+        ],
+        "scheduledState": "ENABLED",
+        "componentType": "PROCESSOR",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "774f34f9-dde5-4bdd-ae2b-8e88ed16ea91",
+        "instanceIdentifier": "9f90cd78-af06-4d52-b497-a5724eee5246",
+        "name": "DeleteHDFS VPC Flow Log",
+        "comments": "",
+        "position": {
+          "x": 1600,
+          "y": 120
+        },
+        "bundle": {
+          "group": "org.apache.nifi",
+          "artifact": "nifi-hadoop-nar",
+          "version": "2.3.0"
+        },
+        "style": {},
+        "type": "org.apache.nifi.processors.hadoop.DeleteHDFS",
+        "properties": {
+          "Hadoop Configuration Resources": "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml",
+          "file_or_directory": "${hdfs.delete.path}",
+          "recursive": "false"
+        },
+        "propertyDescriptors": {},
+        "schedulingPeriod": "0 sec",
+        "schedulingStrategy": "TIMER_DRIVEN",
+        "executionNode": "ALL",
+        "penaltyDuration": "30 sec",
+        "yieldDuration": "1 sec",
+        "bulletinLevel": "WARN",
+        "runDurationMillis": 0,
+        "concurrentlySchedulableTaskCount": 1,
+        "autoTerminatedRelationships": [
+          "success"
+        ],
+        "scheduledState": "ENABLED",
+        "componentType": "PROCESSOR",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      }
+    ],
+    "inputPorts": [],
+    "outputPorts": [],
+    "connections": [
+      {
+        "identifier": "8a0b8a07-a920-464a-8c67-cbf8b2a4ffd8",
+        "instanceIdentifier": "52aebc01-8630-466a-acd1-6a2f7b21cdd2",
+        "name": "",
+        "source": {
+          "id": "73a62ad0-2099-489a-b89d-4abf32cd8a2e",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Trigger Every 5 Minutes",
+          "comments": "",
+          "instanceIdentifier": "db36ad4f-d65b-43af-81b4-94d5065e8b02"
+        },
+        "destination": {
+          "id": "6ac6365f-723c-4647-8192-c42b3b4ada4a",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Set CMDB IP List Path",
+          "comments": "",
+          "instanceIdentifier": "13d2f3cc-7ad2-458a-9a20-5a804240a529"
+        },
+        "labelIndex": 1,
+        "zIndex": 0,
+        "selectedRelationships": [
+          "success"
+        ],
+        "backPressureObjectThreshold": 10000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "componentType": "CONNECTION",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "e10e2d9b-ae41-4d1f-8a0a-112c9d6e5f3c",
+        "instanceIdentifier": "42f9b007-7777-42de-90b5-f9ef12e9606b",
+        "name": "",
+        "source": {
+          "id": "6ac6365f-723c-4647-8192-c42b3b4ada4a",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Set CMDB IP List Path",
+          "comments": "",
+          "instanceIdentifier": "13d2f3cc-7ad2-458a-9a20-5a804240a529"
+        },
+        "destination": {
+          "id": "11993095-fde4-42a1-86ea-8eae70cd71d0",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Generate VPC Flow Logs",
+          "comments": "",
+          "instanceIdentifier": "8cd7467f-a59c-4ad9-9e54-9409cd2df75a"
+        },
+        "labelIndex": 1,
+        "zIndex": 0,
+        "selectedRelationships": [
+          "success"
+        ],
+        "backPressureObjectThreshold": 10000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "componentType": "CONNECTION",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "d111c6c2-ba0e-4038-b07d-e97804f43e46",
+        "instanceIdentifier": "54054812-0bac-4622-8236-1fa6f0684c7e",
+        "name": "",
+        "source": {
+          "id": "11993095-fde4-42a1-86ea-8eae70cd71d0",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Generate VPC Flow Logs",
+          "comments": "",
+          "instanceIdentifier": "8cd7467f-a59c-4ad9-9e54-9409cd2df75a"
+        },
+        "destination": {
+          "id": "d162ca60-d205-416f-b539-5407b09142dc",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Set HDFS Filename",
+          "comments": "",
+          "instanceIdentifier": "0fb2a3e8-7a70-40a8-b608-c0a57d9a9bdd"
+        },
+        "labelIndex": 1,
+        "zIndex": 0,
+        "selectedRelationships": [
+          "success"
+        ],
+        "backPressureObjectThreshold": 10000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "componentType": "CONNECTION",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "d486093b-a9e5-4cd6-82b2-37fbfa98b166",
+        "instanceIdentifier": "3a1f4743-76ab-4019-bf73-097097b56eff",
+        "name": "",
+        "source": {
+          "id": "d162ca60-d205-416f-b539-5407b09142dc",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Set HDFS Filename",
+          "comments": "",
+          "instanceIdentifier": "0fb2a3e8-7a70-40a8-b608-c0a57d9a9bdd"
+        },
+        "destination": {
+          "id": "97132b67-8a2c-4e32-9bfc-c03f7509abd9",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "PutHDFS VPC Flow Log",
+          "comments": "",
+          "instanceIdentifier": "11e63128-fd3e-4908-947a-2f77b768bd52"
+        },
+        "labelIndex": 1,
+        "zIndex": 0,
+        "selectedRelationships": [
+          "success"
+        ],
+        "backPressureObjectThreshold": 10000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "componentType": "CONNECTION",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "ee084916-5c4f-42ec-b9d1-140d5a5a8377",
+        "instanceIdentifier": "3ed9e31f-6bb7-4c6c-babd-c355c5a58c85",
+        "name": "",
+        "source": {
+          "id": "47d7899b-b473-4983-bfac-768c5480530c",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "ListHDFS VPC Flow Logs",
+          "comments": "",
+          "instanceIdentifier": "68e9b8ce-ddff-4743-8fbc-0695f86cff1a"
+        },
+        "destination": {
+          "id": "e9abf0df-6167-465c-a21b-1bad3fa9622a",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Set HDFS Delete Path",
+          "comments": "",
+          "instanceIdentifier": "22c259dc-4466-423f-8039-7c1c374014a4"
+        },
+        "labelIndex": 1,
+        "zIndex": 0,
+        "selectedRelationships": [
+          "success"
+        ],
+        "backPressureObjectThreshold": 10000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "componentType": "CONNECTION",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "bcb62919-3306-4c49-95b6-7d3112da1adc",
+        "instanceIdentifier": "db6c0240-e159-4369-8898-5586cabf703d",
+        "name": "",
+        "source": {
+          "id": "e9abf0df-6167-465c-a21b-1bad3fa9622a",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Set HDFS Delete Path",
+          "comments": "",
+          "instanceIdentifier": "22c259dc-4466-423f-8039-7c1c374014a4"
+        },
+        "destination": {
+          "id": "b964b98e-44c2-45db-ae8a-d9a8f829f828",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Route Files Older Than 6 Hours",
+          "comments": "",
+          "instanceIdentifier": "442ed6fd-0513-45aa-96f3-df203e15dee5"
+        },
+        "labelIndex": 1,
+        "zIndex": 0,
+        "selectedRelationships": [
+          "success"
+        ],
+        "backPressureObjectThreshold": 10000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "componentType": "CONNECTION",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      },
+      {
+        "identifier": "fddf732b-d08b-4bf6-9471-db4fee9d0c84",
+        "instanceIdentifier": "cc9bc4e0-2af2-4d18-a028-5650ab644bfe",
+        "name": "",
+        "source": {
+          "id": "b964b98e-44c2-45db-ae8a-d9a8f829f828",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "Route Files Older Than 6 Hours",
+          "comments": "",
+          "instanceIdentifier": "442ed6fd-0513-45aa-96f3-df203e15dee5"
+        },
+        "destination": {
+          "id": "774f34f9-dde5-4bdd-ae2b-8e88ed16ea91",
+          "type": "PROCESSOR",
+          "groupId": "069c65e6-03bf-45b6-83ab-865c73ff290a",
+          "name": "DeleteHDFS VPC Flow Log",
+          "comments": "",
+          "instanceIdentifier": "9f90cd78-af06-4d52-b497-a5724eee5246"
+        },
+        "labelIndex": 1,
+        "zIndex": 0,
+        "selectedRelationships": [
+          "delete"
+        ],
+        "backPressureObjectThreshold": 10000,
+        "backPressureDataSizeThreshold": "1 GB",
+        "flowFileExpiration": "0 sec",
+        "prioritizers": [],
+        "bends": [],
+        "loadBalanceStrategy": "DO_NOT_LOAD_BALANCE",
+        "partitioningAttribute": "",
+        "loadBalanceCompression": "DO_NOT_COMPRESS",
+        "componentType": "CONNECTION",
+        "groupIdentifier": "069c65e6-03bf-45b6-83ab-865c73ff290a"
+      }
+    ],
+    "labels": [],
+    "funnels": [],
+    "controllerServices": [],
+    "variables": {
+      "hdfs.config.resources": "/etc/hadoop/conf/core-site.xml,/etc/hadoop/conf/hdfs-site.xml",
+      "hdfs.log.directory": "/data/logs/flowlog",
+      "log.retention.hours": "6",
+      "cmdb.nic.ip.list.path": "/etc/nifi/conf/cmdb_nic_ips.txt"
+    },
+    "defaultFlowFileExpiration": "0 sec",
+    "defaultBackPressureObjectThreshold": 10000,
+    "defaultBackPressureDataSizeThreshold": "1 GB",
+    "flowFileConcurrency": "UNBOUNDED",
+    "flowFileOutboundPolicy": "STREAM_WHEN_AVAILABLE",
+    "componentType": "PROCESS_GROUP"
+  }
+}

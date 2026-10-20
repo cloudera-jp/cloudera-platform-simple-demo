@@ -1,0 +1,49 @@
+Ranger setup for demo_logs (SQL user: admin)
+============================================
+
+demo_logs.weblog and demo_logs.flowlog
+
+Prerequisites
+-------------
+- User "admin" exists in LDAP/FreeIPA (or your CDP identity source) and can kinit.
+- NiFi continues writing under HDFS /data/logs/httpd (same path as LOCATION).
+
+1) HDFS (required for EXTERNAL TABLE)
+-------------------------------------
+Policy type: HDFS
+Resource paths (each or parent /data/logs):
+  /data/logs/httpd   — demo_logs.weblog
+  /data/logs/flowlog — demo_logs.flowlog
+Permissions for user admin: Read, Execute
+  (Execute = list directory; Read = read file contents)
+
+2) Hive — one-time DDL
+----------------------
+While running 01_create_weblog_external_table.sql:
+  Database demo_logs: Create, Select, Read, Alter (or All)
+  Or grant admin the Hive Admin role in Ranger if appropriate for your environment.
+
+3) Hive — ongoing queries
+-------------------------
+Policy type: Hive
+Database: demo_logs
+Tables: weblog, flowlog
+Permissions for user admin: Select, Read, Update (Update covers metadata refresh in some setups; Select/Read are essential)
+
+If policies are database-level only:
+  demo_logs → Select, Read for admin
+
+4) Verify as admin
+------------------
+  kinit admin@YOUR.REALM
+  beeline -u "jdbc:hive2://<hs2-host>:10000/demo_logs;principal=hive/_HOST@YOUR.REALM" \
+    -f 01_create_weblog_external_table.sql
+  beeline ... -e "SELECT COUNT(*) FROM demo_logs.weblog;"
+  beeline ... -f 03_create_flowlog_external_table.sql
+  beeline ... -e "SELECT COUNT(*) FROM demo_logs.flowlog;"
+
+5) Troubleshooting
+------------------
+- Permission denied on /data/logs/httpd → fix HDFS Ranger policy (not only Hive).
+- Table exists but SELECT returns 0 rows → check files match access.log_* under LOCATION; run dfs -ls /data/logs/httpd.
+- HS2 logs: "No valid privileges" → Hive Ranger policy for admin on demo_logs.weblog.
